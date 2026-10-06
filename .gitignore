@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+
+# Editor / tool folders
+.kilo/
+
+# Generated results (recreate with the scripts; the main figures are kept in figures/)
+outputs/
+
+# Downloads, caches and logs (recreated by build_tess_dataset.py / vet_tess.py / benchmark.py)
+data/external/
+data/tess/_fits_cache/
+data/tess/backup_peak_fold/
+data/tess/*.jsonl
+data/tess/*_log.txt
+data/tess/catalogue_*.csv
+data/tess/candidates_noise.csv
+data/tess/vsx_bright.csv
+
+# Private working notes and one-off tools
+docs/RESEARCH_PLAN.md
+docs/LITERATURE_CHECK.md
+refold_quiet.py
+compare_runs.py
