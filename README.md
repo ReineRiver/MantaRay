@@ -1,4 +1,9 @@
-<p align="center"><img src="assets/logo.png" alt="MantaRay logo" width="220"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo.png" alt="MantaRay: explainable model for TESS light curves" width="520">
+  </picture>
+</p>
 
 <p align="center">
 <b>Explainable 1D-CNN classification of TESS variable stars, with explanations checked against the physics</b>
