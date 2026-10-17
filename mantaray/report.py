@@ -640,15 +640,15 @@ def fix_period(path, S, grid, ranges, variant="B_period", conflict=None):
     (and, if given, the conflict test: stars given another class's period)."""
     T = S[variant]["period_terms"]
     names = S["class_names"]
-    if conflict:
-        fig, axes = plt.subplots(1, 3, figsize=(19, 4.2), constrained_layout=True,
-                                 gridspec_kw={"width_ratios": [1.4, 1, 0.8]})
-    else:
-        fig, axes = plt.subplots(1, 2, figsize=(14, 4.2), constrained_layout=True, gridspec_kw={"width_ratios": [1.4, 1]})
-    ax = axes[0]
+    B = T["by_class"]
+    labels = [CLASS_FULL[c] for c in names]
+    n_runs = len(_runs(B[names[0]]["shape_alone_correct"]))
+    fig = plt.figure(figsize=(14, 9.2), constrained_layout=True)
+    gs = fig.add_gridspec(2, 2, width_ratios=[1.35, 1])
+    ax = fig.add_subplot(gs[0, 0])
     x = 10 ** np.asarray(grid)
     for c in names:
-        runs = np.array([d["per_seed"] for d in T["prior"][c]])   # grid x seeds
+        runs = np.array([d["per_seed"] for d in T["prior"][c]])   # grid x runs
         ax.plot(x, runs.mean(1), color=CLASS_COL[c], lw=2, label=CLASS_FULL[c])
         ax.fill_between(x, runs.min(1), runs.max(1), color=CLASS_COL[c], alpha=0.15, lw=0)
     rows = [(k, CLASS_COL[k], CLASS_FULL[k] + " (trained)") for k in names if k in ranges]
@@ -666,48 +666,63 @@ def fix_period(path, S, grid, ranges, variant="B_period", conflict=None):
     ax.set_xlabel("period (days)")
     ax.set_ylabel("P(class | period alone)")
     ax.legend(frameon=False, fontsize=7.5, loc="upper center", ncol=2)
-    ax.set_title("(a) What the period term learned (line = mean, band = lowest to highest run;\n"
-                 "     bars below: 5–95% period range of each type)", loc="left", fontsize=10)
+    ax.set_title("(a) What the period term learned\n(line = mean, band = lowest to highest run; "
+                 "bars: 5–95% period range of each type)", loc="left", fontsize=10)
 
-    ax = axes[1]
-    w = 0.38
-    B = T["by_class"]
+    ax = fig.add_subplot(gs[0, 1])
+    w = 0.36
     for k, (key, col, lab) in enumerate((("shape_alone_correct", C1, "light-curve shape alone"),
                                          ("period_alone_correct", C2, "period alone"))):
         xx = np.arange(len(names)) + (k - 0.5) * w
-        runs = [np.asarray(B[c][key]["per_seed"], float) for c in names]
-        ax.bar(xx, [r.mean() for r in runs], w * 0.92, color=col, alpha=0.55, label=lab + " (bar = mean)", zorder=2)
-        for xi, r in zip(xx, runs):   # one dot per training run; spread sideways so equal values stay visible
-            ax.scatter(xi + np.linspace(-0.11, 0.11, len(r)), r, s=14, color=col, edgecolor=INK, lw=0.6, zorder=3)
-    share = [np.asarray(B[c]["period_share_of_margin"]["per_seed"], float) for c in names]
-    for i, r in enumerate(share):
-        ax.plot([i, i], [r.min(), r.max()], color=INK, lw=1, zorder=4)
-    ax.plot(np.arange(len(names)), [r.mean() for r in share], "D", color=INK, ms=5, zorder=5,
-            label="period's share of the decision margin (mean, line = range)")
-    ax.scatter([], [], s=14, color="white", edgecolor=INK, lw=0.6, label="one dot = one training run")
-    ax.set_xticks(range(len(names)), [CLASS_FULL[c] for c in names])
+        runs = [_runs(B[c][key]) for c in names]
+        ax.bar(xx, [r.mean() for r in runs], w * 0.9, color=col, alpha=0.35, label=lab, zorder=2)
+        for xi, r in zip(xx, runs):
+            ax.scatter(xi + np.linspace(-0.09, 0.09, len(r)), r, s=16, color=col, edgecolor="white", lw=0.6, zorder=3)
+    ax.set_xticks(range(len(names)), labels)
     ax.set_ylim(0, 1.05)
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
-    ax.set_ylabel("share of correctly classified test stars")
-    ax.legend(frameon=False, fontsize=7.5, loc="upper center", ncol=2, bbox_to_anchor=(0.5, -0.08))
-    ax.set_title("(b) Would each half have got the star right on its own?", loc="left", fontsize=10)
+    ax.set_ylabel("correct test stars it would still get right")
+    ax.legend(frameon=False, fontsize=8, loc="upper center", ncol=2, bbox_to_anchor=(0.5, -0.07))
+    ax.set_title("(b) Would each half get the star right on its own?\n(bar = mean, dot = one training run)",
+                 loc="left", fontsize=10)
+
+    ax = fig.add_subplot(gs[1, 0])
+    y = np.arange(len(names))[::-1]
+    for yi, c in zip(y, names):
+        r = _runs(B[c]["period_share_of_margin"])
+        ax.plot([r.min(), r.max()], [yi, yi], color=CLASS_COL[c], lw=6, alpha=0.25, solid_capstyle="round")
+        ax.scatter(r, np.full(len(r), yi), s=22, color=CLASS_COL[c], edgecolor="white", lw=0.6, zorder=3)
+        ax.plot([r.mean()] * 2, [yi - 0.25, yi + 0.25], color=INK, lw=2, zorder=4)
+        ax.text(1.02, yi, f"{100 * r.mean():.0f}%", va="center", fontsize=8)
+    ax.axvline(0.5, color=INK2, lw=1, ls=":")
+    ax.text(0.25, len(names) - 0.45, "decided mostly\nby the shape", ha="center", fontsize=8, color=INK2)
+    ax.text(0.75, len(names) - 0.45, "decided mostly\nby the period", ha="center", fontsize=8, color=INK2)
+    ax.set_yticks(y, labels)
+    ax.set_xlim(0, 1.08)
+    ax.set_ylim(-0.6, len(names) + 0.1)
+    ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
+    ax.set_xlabel("period's share of the winning margin (0% = all shape, 100% = all period)")
+    ax.set_title("(c) How much of each decision comes from the period\n"
+                 "(dot = one training run, black tick = mean)", loc="left", fontsize=10)
+
+    ax = fig.add_subplot(gs[1, 1])
     if conflict:
-        ax = axes[2]
         A = np.array([[conflict[f"{c}_given_{d}_period"]["kept_own_class"]["mean"] for d in names] for c in names])
         im = ax.imshow(A, vmin=0, vmax=1, cmap="Blues")
         for i in range(len(names)):
             for j in range(len(names)):
                 ax.text(j, i, f"{100 * A[i, j]:.0f}%", ha="center", va="center", fontsize=8,
                         color="white" if A[i, j] > 0.6 else INK)
-        ax.set_xticks(range(len(names)), [CLASS_FULL[c] for c in names], fontsize=8)
-        ax.set_yticks(range(len(names)), [CLASS_FULL[c] for c in names], fontsize=8)
+        ax.set_xticks(range(len(names)), labels, fontsize=8)
+        ax.set_yticks(range(len(names)), labels, fontsize=8)
         ax.set_xlabel("period taken from a star of this class")
         ax.set_ylabel("light-curve shape of this class")
         fig.colorbar(im, ax=ax, fraction=0.046, format=matplotlib.ticker.PercentFormatter(1.0))
-        ax.set_title("(c) Conflict test: share that keeps its own class\n     (mean over runs)", loc="left", fontsize=10)
-    n_runs = len(B[names[0]]["shape_alone_correct"]["per_seed"])
+        ax.set_title("(d) Conflict test: share that keeps its own class\n(mean over runs)", loc="left", fontsize=10)
+    else:
+        ax.axis("off")
     fig.suptitle("Period input: logit = shape term + period term, so every decision splits exactly in two "
-                 f"({n_runs} training runs)", fontsize=10, x=0.01, ha="left")
+                 f"({n_runs} training runs)", fontsize=11, x=0.01, ha="left")
     fig.savefig(path, dpi=160)
     plt.close(fig)
 
