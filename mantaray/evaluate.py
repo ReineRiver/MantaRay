@@ -22,7 +22,7 @@ plt.rcParams.update({"font.size": 9, "axes.spines.top": False, "axes.spines.righ
                      "axes.edgecolor": "#52514e", "axes.labelcolor": "#0b0b0b"})
 
 
-# ====================================================================== explanations + metrics
+# ================================================================== explanations + metrics
 
 def explain_all(model, X, y):
     S = {}
@@ -99,7 +99,8 @@ def deletion_summary(runs):
     for cls in runs[0]["deletion"]:
         arrays[cls] = {k: np.array([r["deletion"][cls][k] for r in runs]) for k in runs[0]["deletion"][cls]}
         out[cls] = {k: {"mean": v.mean(0).tolist(),
-                        "std": (v.std(0, ddof=1) if len(v) > 1 else 0 * v[0]).tolist()}
+                        "std": (v.std(0, ddof=1) if len(v) > 1 else 0 * v[0]).tolist(),
+                        "per_seed": v.tolist()}
                     for k, v in arrays[cls].items()}
     return out, arrays
 
@@ -130,9 +131,9 @@ def curve(ax, x, s, title, mask=None):
 
 
 def band(ax, x, arr, color, label, ls="-"):
-    m, s = arr.mean(0), (arr.std(0, ddof=1) if len(arr) > 1 else 0 * arr[0])
-    ax.plot(x, m, ls, marker="o", color=color, lw=2, ms=4, label=label)
-    ax.fill_between(x, m - s, m + s, color=color, alpha=0.15, lw=0)
+    """arr: runs x points. Line = mean over runs, band = lowest to highest run."""
+    ax.plot(x, arr.mean(0), ls, marker="o", color=color, lw=2, ms=4, label=label)
+    ax.fill_between(x, arr.min(0), arr.max(0), color=color, alpha=0.15, lw=0)
 
 
 def fig_examples(path, X, y, M, S, ok, idx=None, titles=None, class_names=CLASS_NAMES):
@@ -173,7 +174,7 @@ def fig_deletion(path, D, fractions):
         ax.set_title(name, loc="left")
         ax.set_xlabel("% of phase bins flattened")
     axes = np.atleast_1d(axes)
-    axes[0].set_ylabel("P(true class), mean ± std over seeds")
+    axes[0].set_ylabel("P(true class)\n(line = mean, band = lowest to highest run)")
     axes[0].set_ylim(0, 1.02)
     axes[0].legend(frameon=False, loc="lower left")
     fig.savefig(path, dpi=160)

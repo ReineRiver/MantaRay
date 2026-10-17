@@ -20,22 +20,34 @@ from mantaray.evaluate import C1, C2, C3, C_RND, METHODS  # noqa: E402
 
 INK, INK2 = "#0b0b0b", "#52514e"
 METHOD_LABELS = ["Grad-CAM\nconv1", "Grad-CAM\nconv2", "Grad-CAM\nconv3", "Integrated\nGradients"]
+RUNS_NOTE = "line = mean; band = lowest to highest training run"
+
+
+def _runs(d):
+    """Per-run values of a summarised metric ({'mean', 'std', 'per_seed'})."""
+    v = np.asarray(d.get("per_seed", [d["mean"]]), float)
+    return v[np.isfinite(v)] if np.isfinite(v).any() else np.array([np.nan])
+
+
+def _dots(ax, pos, d, color, horizontal=False, spread=0.1):
+    """One dot per training run, spread sideways so equal values stay visible."""
+    v = _runs(d)
+    off = np.linspace(-spread, spread, len(v)) if len(v) > 1 else np.zeros(1)
+    xy = (v, pos + off) if horizontal else (pos + off, v)
+    ax.scatter(*xy, s=12, color=color, edgecolor=INK, lw=0.5, zorder=4)
 
 
 def _paired_bars(ax, synth, tess, key, chance_key, title):
-    """Synthetic vs TESS per method: bar = mean, dots = individual seeds, whisker = std."""
+    """Synthetic vs TESS per method: bar = mean, dots = individual training runs."""
     w = 0.36
     for k, (res, color, label) in enumerate(((synth, C1, "synthetic"), (tess, C2, "real TESS"))):
         if res is None:
             continue
         x = np.arange(len(METHODS)) + (k - 0.5) * w
         means = [res["physics"][m][key]["mean"] for m in METHODS]
-        stds = [res["physics"][m][key]["std"] for m in METHODS]
-        ax.bar(x, means, w * 0.92, color=color, alpha=0.85, label=label, zorder=2)
-        ax.errorbar(x, means, yerr=stds, fmt="none", ecolor=INK, elinewidth=1, capsize=2, zorder=3)
+        ax.bar(x, means, w * 0.92, color=color, alpha=0.55, label=label, zorder=2)
         for xi, m in zip(x, METHODS):
-            v = np.array(res["physics"][m][key]["per_seed"], float)
-            ax.scatter(np.full(len(v), xi), v, s=8, color=INK, alpha=0.5, lw=0, zorder=4)
+            _dots(ax, xi, res["physics"][m][key], color, spread=0.08)
         ch = res["physics"]["intgrad"][chance_key]["mean"]
         ax.plot([-0.5, len(METHODS) - 0.5], [ch, ch], ls=":", lw=1.2, color=color, zorder=1)
         ax.text(len(METHODS) - 0.48, ch, f"chance ({label}) {100 * ch:.0f}%", fontsize=7, color=INK2,
@@ -105,7 +117,7 @@ def tess_overview(path, tess_summary, synth_summary, stars, transfer_preds):
                  "EB_share_eclipse_plus_contacts_chance",
                  "(a) Binaries: heatmap peak lands on an eclipse")
     axes[0, 0].legend(frameon=False, fontsize=8, loc="upper right")
-    axes[0, 0].set_ylabel(f"share of stars (mean ± std over {tess_summary['n_seeds']} seeds)")
+    axes[0, 0].set_ylabel(f"share of stars (bar = mean, dots = {tess_summary['n_seeds']} runs)")
     _paired_bars(axes[0, 1], synth_summary, tess_summary, "DSCT_share_on_max_min",
                  "DSCT_share_on_max_min_chance",
                  "(b) δ Scuti: share of heatmap on light maximum / minimum")
@@ -182,7 +194,10 @@ def significance(path, sig):
 
 
 def _series(rows, key):
-    return np.array([r[key]["mean"] for r in rows]), np.array([r[key]["std"] for r in rows])
+    """Mean over runs, and the lowest and highest run, for each row."""
+    runs = [_runs(r[key]) for r in rows]
+    return (np.array([r[key]["mean"] for r in rows]), np.array([v.min() for v in runs]),
+            np.array([v.max() for v in runs]))
 
 
 def noise_robustness(path, rows, levels):
@@ -193,18 +208,18 @@ def noise_robustness(path, rows, levels):
                               ("accuracy_DSCT", C2, "δ Scuti"), ("accuracy_ROT", C3, "rotators")):
         if key not in rows[0]:
             continue
-        m, s = _series(rows, key)
+        m, lo, hi = _series(rows, key)
         ax.plot(x, m, "-o", color=color, lw=2, ms=5, label=label)
-        ax.fill_between(x, m - s, m + s, color=color, alpha=0.15, lw=0)
+        ax.fill_between(x, lo, hi, color=color, alpha=0.15, lw=0)
     ax.set_title("(a) Classification accuracy", loc="left")
     ax.legend(frameon=False, fontsize=8)
     for ax, metric, title, chance_key in (
             (axes[1], "EB_peak_on_eclipse", "(b) Binaries: heatmap peak on eclipse", "EB_peak_chance"),
             (axes[2], "DSCT_share_on_max_min", "(c) δ Scuti: share on light max/min", None)):
         for name, color, label in (("intgrad", C2, "Integrated Gradients"), ("gradcam_conv2", C3, "Grad-CAM conv2")):
-            m, s = _series(rows, f"{metric}_{name}")
+            m, lo, hi = _series(rows, f"{metric}_{name}")
             ax.plot(x, m, "-o", color=color, lw=2, ms=5, label=label)
-            ax.fill_between(x, m - s, m + s, color=color, alpha=0.15, lw=0)
+            ax.fill_between(x, lo, hi, color=color, alpha=0.15, lw=0)
         if chance_key:
             ch = np.nanmean(_series(rows, chance_key)[0])
             ax.axhline(ch, color=INK2, lw=1, ls=":")
@@ -215,7 +230,7 @@ def noise_robustness(path, rows, levels):
         ax.set_ylim(0, 1.03)
         ax.set_xlabel("added noise (× the curve's own scatter)")
         ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
-    fig.suptitle("Robustness: the real test stars made artificially noisier (as if fainter); mean ± std over seeds",
+    fig.suptitle(f"Robustness: the real test stars made artificially noisier (as if fainter); {RUNS_NOTE}",
                  fontsize=10, x=0.01, ha="left")
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -235,15 +250,15 @@ def baseline(path, summary):
     rf_label = "random forest on " + summary.get("random_forest_inputs", "shape features")
     for k, (vals, color, label) in enumerate(((cnn, C2, cnn_label), (rfa, C1, rf_label))):
         dy = (k - 0.5) * 0.38
-        ax.barh(y + dy, [v["mean"] for v in vals], 0.35, xerr=[v["std"] for v in vals], color=color, label=label,
-                error_kw={"elinewidth": 1, "ecolor": INK})
+        ax.barh(y + dy, [v["mean"] for v in vals], 0.35, color=color, alpha=0.55, label=label)
         for yi, v in zip(y, vals):
-            ax.text(min(v["mean"], 1) + 0.015, yi + dy, f"{100 * v['mean']:.1f}%", va="center", fontsize=7.5)
+            _dots(ax, yi + dy, v, color, horizontal=True, spread=0.1)
+            ax.text(min(_runs(v).max(), 1) + 0.015, yi + dy, f"{100 * v['mean']:.1f}%", va="center", fontsize=7.5)
     ax.set_yticks(y, names)
     ax.invert_yaxis()
     ax.set_xlim(0, 1.15)
     ax.xaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
-    ax.set_title("(a) Test accuracy (mean ± std over seeds)", loc="left")
+    ax.set_title("(a) Test accuracy (bar = mean, dots = individual runs)", loc="left")
     ax.legend(frameon=False, fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=2)
     ax = axes[1]
     imp = {k: v["mean"] for k, v in rf["feature_importance"].items()}
@@ -333,14 +348,17 @@ def open_set(path, O, names):
             ("known test stars wrongly\nflagged 'unknown'", O["known_test_flagged_unknown"]),
             ("accuracy on known stars\nwhen confident", O["known_test_accuracy_when_confident"])]
     for i, (lab, d) in enumerate(vals):
-        ax.barh(i, d["mean"], xerr=d["std"], color=[C1, UNKNOWN_COLOR, C2][i], error_kw={"ecolor": INK})
-        ax.text(min(d["mean"] + d["std"], 1.05) + 0.03, i, f"{100 * d['mean']:.1f}%" if i else f"{d['mean']:.3f}",
+        col = [C1, UNKNOWN_COLOR, C2][i]
+        ax.barh(i, d["mean"], color=col, alpha=0.55)
+        _dots(ax, i, d, col, horizontal=True, spread=0.2)
+        ax.text(min(_runs(d).max(), 1.05) + 0.03, i, f"{100 * d['mean']:.1f}%" if i else f"{d['mean']:.3f}",
                 va="center", fontsize=8)
     ax.set_yticks(range(len(vals)), [v[0] for v in vals], fontsize=8)
     ax.invert_yaxis()
     ax.set_xlim(0, 1.2)
     ax.set_title("(b) Can confidence flag them?", loc="left")
-    fig.suptitle('"Unknown" = less confident than 95% of the validation stars; mean over seeds',
+    fig.suptitle('"Unknown" = less confident than 95% of the validation stars; (a) mean over runs, '
+                 '(b) bar = mean, dots = individual runs',
                  fontsize=9, x=0.01, ha="left")
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -368,13 +386,13 @@ def detection_limit(path, rows, sigma_ppm, limits):
                 continue
             if two_arms and key.startswith("sine_"):
                 label = "δ Sct period: " + label
-            m, s = _series(rows, key)
+            m, lo, hi = _series(rows, key)
             if key == "eclipse_IG_peak_on_injected":
                 # only plot where enough injected eclipses were called binary for the percentage to mean something
                 few = _series(rows, "eclipse_called_EB")[0] < IG_MIN_CALLED
-                m, s = np.where(few, np.nan, m), np.where(few, np.nan, s)
+                m, lo, hi = (np.where(few, np.nan, a) for a in (m, lo, hi))
             ax.plot(snr, m, ls, marker="o", color=color, lw=2, ms=4, label=label)
-            ax.fill_between(snr, m - s, m + s, color=color, alpha=0.12, lw=0)
+            ax.fill_between(snr, lo, hi, color=color, alpha=0.12, lw=0)
         ax.axhline(0.5, color=INK2, lw=1, ls=":")
         ax.set_xscale("log")
         ax.set_ylim(0, 1.03)
@@ -398,14 +416,15 @@ def detection_limit(path, rows, sigma_ppm, limits):
             ax.axvline(v, color=INK2, lw=1)
             ax.text(v / 1.06, 0.62, f"50% at S/N {v:.1f}\n= {v * sigma_ppm:.0f} ppm", fontsize=7.5, color=INK2,
                     ha="right")
-    fig.suptitle("Detection limit: signals of known size injected into real quiet TESS stars; mean ± std over seeds",
+    fig.suptitle(f"Detection limit: signals of known size injected into real quiet TESS stars; {RUNS_NOTE}",
                  fontsize=10, x=0.01, ha="left")
     fig.savefig(path, dpi=160)
     plt.close(fig)
 
 
-def _m(d):
-    return d["mean"], d["std"]
+FIX_VARIANTS = ("plain", "A_snr_matched", "B_period", "AB_both")
+FIX_LABELS = {"plain": "shape only", "A_snr_matched": "A: S/N-matched", "B_period": "B: + period", "AB_both": "A + B"}
+FIX_COLORS = {"plain": C_RND, "A_snr_matched": C1, "B_period": C2, "AB_both": C3}
 
 
 def _faint_x(rows):
@@ -421,17 +440,17 @@ def fix_shortcut(path, S):
     snr = np.array([r["snr"]["mean"] for r in S["plain"]["injection"]])
     ax = axes[0]
     for v in ("plain", "A_snr_matched"):
-        m, s = _series(S[v]["injection"], "sine_dsct_period_called_ROT")
+        m, lo, hi = _series(S[v]["injection"], "sine_dsct_period_called_ROT")
         ax.plot(snr, m, "-o", color=FIX_COLORS[v], lw=2, ms=4, label=FIX_LABELS[v])
-        ax.fill_between(snr, m - s, m + s, color=FIX_COLORS[v], alpha=0.12, lw=0)
+        ax.fill_between(snr, lo, hi, color=FIX_COLORS[v], alpha=0.12, lw=0)
     ax.set_title("(a) Injected sinusoids, shape-only models", loc="left", fontsize=10)
     ax.set_ylabel('share called "rotator"')
     ax = axes[1]
     for v in ("B_period", "AB_both"):
         for arm, ls, lab in (("rot_period", "-", "rotator period"), ("dsct_period", "--", "δ Sct period")):
-            m, s = _series(S[v]["injection"], f"sine_{arm}_called_ROT")
+            m, lo, hi = _series(S[v]["injection"], f"sine_{arm}_called_ROT")
             ax.plot(snr, m, ls, marker="o", color=FIX_COLORS[v], lw=2, ms=4, label=f"{FIX_LABELS[v]}, {lab}")
-            ax.fill_between(snr, m - s, m + s, color=FIX_COLORS[v], alpha=0.10, lw=0)
+            ax.fill_between(snr, lo, hi, color=FIX_COLORS[v], alpha=0.10, lw=0)
     ax.set_title("(b) Injected sinusoids, models with period", loc="left", fontsize=10)
     for ax in axes[:2]:
         ax.set_xscale("log")
@@ -441,11 +460,11 @@ def fix_shortcut(path, S):
         for v in FIX_VARIANTS:
             rows = S[v]["faint"]
             x = _faint_x(rows)
-            m, s = _series(rows, key)
+            m, lo, hi = _series(rows, key)
             ax.plot(x, m, "-o", color=FIX_COLORS[v], lw=2, ms=4, label=FIX_LABELS[v])
-            ax.fill_between(x, m - s, m + s, color=FIX_COLORS[v], alpha=0.10, lw=0)
+            ax.fill_between(x, lo, hi, color=FIX_COLORS[v], alpha=0.10, lw=0)
         if cls == "DSCT":
-            m, _ = _series(S["plain"]["faint"], "DSCT_called_ROT")
+            m = _series(S["plain"]["faint"], "DSCT_called_ROT")[0]
             ax.plot(x, m, ":", color=C_RND, lw=1.5, label='shape only: called "rotator"')
         ax.set_xscale("log")
         ticks = list(x)
@@ -458,7 +477,7 @@ def fix_shortcut(path, S):
         ax.set_ylim(0, 1.03)
         ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
         ax.legend(frameon=False, fontsize=7, loc="best")
-    fig.suptitle("Is the rotator / δ Scuti call decided by signal-to-noise, by period, or by shape? (mean ± std over seeds)",
+    fig.suptitle(f"Is the rotator / δ Scuti call decided by signal-to-noise, by period, or by shape? ({RUNS_NOTE})",
                  fontsize=10, x=0.01, ha="left")
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -474,9 +493,9 @@ def fix_accuracy(path, S):
     for k, v in enumerate(FIX_VARIANTS):
         x = np.arange(len(groups)) + (k - 1.5) * w
         vals = [S[v]["accuracy_by_class"][c] for c in names] + [S[v]["test_accuracy"]]
-        ax.bar(x, [d["mean"] for d in vals], w * 0.92, color=FIX_COLORS[v], label=FIX_LABELS[v], zorder=2)
-        ax.errorbar(x, [d["mean"] for d in vals], yerr=[d["std"] for d in vals], fmt="none", ecolor=INK,
-                    elinewidth=1, capsize=2, zorder=3)
+        ax.bar(x, [d["mean"] for d in vals], w * 0.92, color=FIX_COLORS[v], alpha=0.55, label=FIX_LABELS[v], zorder=2)
+        for xi, d in zip(x, vals):
+            _dots(ax, xi, d, FIX_COLORS[v], spread=0.06)
     ax.set_xticks(range(len(groups)), ["quiet", "binary", "δ Scuti", "rotator", "all"])
     ax.set_ylim(0.5, 1.02)
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
@@ -521,7 +540,7 @@ def fix_accuracy(path, S):
         ax.set_ylabel("light-curve shape of this class")
         fig.colorbar(im, ax=ax, fraction=0.046, format=matplotlib.ticker.PercentFormatter(1.0))
     ax.set_title("(c) Conflict test (B: + period): share that\nkeeps its own class", loc="left", fontsize=10)
-    fig.suptitle("Accuracy with the fixes (vetted TESS stars, mean ± std over seeds)", fontsize=10, x=0.01, ha="left")
+    fig.suptitle("Accuracy with the fixes (vetted TESS stars; bar = mean, dots = individual training runs)", fontsize=10, x=0.01, ha="left")
     fig.savefig(path, dpi=160)
     plt.close(fig)
 
@@ -540,9 +559,9 @@ def fix_unknown(path, S, ref3=None):
     for k, v in enumerate(FIX_VARIANTS):
         x = np.arange(len(dets)) + (k - 1.5) * w
         m = [S[v]["open_set"][d]["auroc_known_vs_unseen"]["mean"] for d in dets]
-        s = [S[v]["open_set"][d]["auroc_known_vs_unseen"]["std"] for d in dets]
-        ax.bar(x, m, w * 0.92, color=FIX_COLORS[v], label=FIX_LABELS[v], zorder=2)
-        ax.errorbar(x, m, yerr=s, fmt="none", ecolor=INK, elinewidth=1, capsize=2, zorder=3)
+        ax.bar(x, m, w * 0.92, color=FIX_COLORS[v], alpha=0.55, label=FIX_LABELS[v], zorder=2)
+        for xi, d in zip(x, dets):
+            _dots(ax, xi, S[v]["open_set"][d]["auroc_known_vs_unseen"], FIX_COLORS[v], spread=0.06)
         for d, val in zip(dets, m):
             if val > best_v:
                 best, best_v = (v, d), val
@@ -566,9 +585,9 @@ def fix_unknown(path, S, ref3=None):
         T = S[v]["open_set"][d]["types"]
         x = np.arange(len(types)) + (k - 0.5) * w
         m = [T[t]["flagged_unknown"]["mean"] for t in types]
-        s = [T[t]["flagged_unknown"]["std"] for t in types]
-        ax.bar(x, m, w * 0.92, color=col, label=lab, zorder=2)
-        ax.errorbar(x, m, yerr=s, fmt="none", ecolor=INK, elinewidth=1, capsize=2, zorder=3)
+        ax.bar(x, m, w * 0.92, color=col, alpha=0.55, label=lab, zorder=2)
+        for xi, t in zip(x, types):
+            _dots(ax, xi, T[t]["flagged_unknown"], col, spread=0.1)
         ax.axhline(S[v]["open_set"][d]["known_test_flagged_unknown"]["mean"], color=col, lw=1, ls="--")
     ax.plot([], [], "--", color=INK2, lw=1, label="known stars wrongly flagged")
     ax.set_xticks(range(len(types)), [UNSEEN_LABELS.get(t, t).replace(" ", "\n", 1) for t in types], fontsize=8)
@@ -577,7 +596,7 @@ def fix_unknown(path, S, ref3=None):
     ax.set_ylabel('flagged "unknown"')
     ax.legend(frameon=False, fontsize=7.5, loc="upper left")
     ax.set_title('(b) Never-seen types flagged "unknown"', loc="left", fontsize=10)
-    fig.suptitle('Detecting star types the model never saw ("unknown" = below the 5% validation quantile; mean ± std over seeds)',
+    fig.suptitle('Detecting star types the model never saw ("unknown" = below the 5% validation quantile; bar = mean, dots = training runs)',
                  fontsize=10, x=0.01, ha="left")
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -595,9 +614,9 @@ def fix_explanations(path, S):
         x = np.arange(len(metrics)) + (k - 1.5) * w
         P = S[v]["physics"]
         m = [P[meth][key]["mean"] for meth, key, _, _ in metrics]
-        s = [P[meth][key]["std"] for meth, key, _, _ in metrics]
-        ax.bar(x, m, w * 0.92, color=FIX_COLORS[v], label=FIX_LABELS[v], zorder=2)
-        ax.errorbar(x, m, yerr=s, fmt="none", ecolor=INK, elinewidth=1, capsize=2, zorder=3)
+        ax.bar(x, m, w * 0.92, color=FIX_COLORS[v], alpha=0.55, label=FIX_LABELS[v], zorder=2)
+        for xi, (meth, key, _, _) in zip(x, metrics):
+            _dots(ax, xi, P[meth][key], FIX_COLORS[v], spread=0.06)
     for i, (meth, key, ck, _) in enumerate(metrics):
         c = S["plain"]["physics"]["intgrad"]["EB_share_eclipse_plus_contacts_chance" if ck is None else ck]["mean"]
         ax.plot([i - 0.45, i + 0.45], [c, c], color=INK, lw=1.2, ls=":", zorder=4)
@@ -606,7 +625,7 @@ def fix_explanations(path, S):
     ax.set_ylim(0, 1.05)
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
     ax.legend(frameon=False, fontsize=7.5, ncol=5, loc="upper center", bbox_to_anchor=(0.5, -0.17))
-    ax.set_title("Do the explanations stay on the physics after the fixes? (correct test stars, mean ± std over seeds)",
+    ax.set_title("Do the explanations stay on the physics after the fixes? (correct test stars; bar = mean, dots = runs)",
                  loc="left", fontsize=10)
     fig.savefig(path, dpi=160)
     plt.close(fig)
@@ -629,10 +648,9 @@ def fix_period(path, S, grid, ranges, variant="B_period", conflict=None):
     ax = axes[0]
     x = 10 ** np.asarray(grid)
     for c in names:
-        m = np.array([d["mean"] for d in T["prior"][c]])
-        s = np.array([d["std"] for d in T["prior"][c]])
-        ax.plot(x, m, color=CLASS_COL[c], lw=2, label=CLASS_FULL[c])
-        ax.fill_between(x, m - s, m + s, color=CLASS_COL[c], alpha=0.15, lw=0)
+        runs = np.array([d["per_seed"] for d in T["prior"][c]])   # grid x seeds
+        ax.plot(x, runs.mean(1), color=CLASS_COL[c], lw=2, label=CLASS_FULL[c])
+        ax.fill_between(x, runs.min(1), runs.max(1), color=CLASS_COL[c], alpha=0.15, lw=0)
     rows = [(k, CLASS_COL[k], CLASS_FULL[k] + " (trained)") for k in names if k in ranges]
     rows += [(k, INK2, UNSEEN_LABELS.get(k, k) + " (never seen)") for k in ("RR", "GDOR", "ELL", "DIP") if k in ranges]
     for i, (k, col, lab) in enumerate(rows):
@@ -648,7 +666,8 @@ def fix_period(path, S, grid, ranges, variant="B_period", conflict=None):
     ax.set_xlabel("period (days)")
     ax.set_ylabel("P(class | period alone)")
     ax.legend(frameon=False, fontsize=7.5, loc="upper center", ncol=2)
-    ax.set_title("(a) What the period term learned (bars: 5–95% period range of each type)", loc="left", fontsize=10)
+    ax.set_title("(a) What the period term learned (line = mean, band = lowest to highest run;\n"
+                 "     bars below: 5–95% period range of each type)", loc="left", fontsize=10)
 
     ax = axes[1]
     w = 0.38
@@ -656,17 +675,21 @@ def fix_period(path, S, grid, ranges, variant="B_period", conflict=None):
     for k, (key, col, lab) in enumerate((("shape_alone_correct", C1, "light-curve shape alone"),
                                          ("period_alone_correct", C2, "period alone"))):
         xx = np.arange(len(names)) + (k - 0.5) * w
-        m = [B[c][key]["mean"] for c in names]
-        s = [B[c][key]["std"] for c in names]
-        ax.bar(xx, m, w * 0.92, color=col, label=lab, zorder=2)
-        ax.errorbar(xx, m, yerr=s, fmt="none", ecolor=INK, elinewidth=1, capsize=2, zorder=3)
-    share = [B[c]["period_share_of_margin"]["mean"] for c in names]
-    ax.plot(np.arange(len(names)), share, "D", color=INK, ms=5, zorder=4, label="period's share of the decision margin")
+        runs = [np.asarray(B[c][key]["per_seed"], float) for c in names]
+        ax.bar(xx, [r.mean() for r in runs], w * 0.92, color=col, alpha=0.55, label=lab + " (bar = mean)", zorder=2)
+        for xi, r in zip(xx, runs):   # one dot per training run; spread sideways so equal values stay visible
+            ax.scatter(xi + np.linspace(-0.11, 0.11, len(r)), r, s=14, color=col, edgecolor=INK, lw=0.6, zorder=3)
+    share = [np.asarray(B[c]["period_share_of_margin"]["per_seed"], float) for c in names]
+    for i, r in enumerate(share):
+        ax.plot([i, i], [r.min(), r.max()], color=INK, lw=1, zorder=4)
+    ax.plot(np.arange(len(names)), [r.mean() for r in share], "D", color=INK, ms=5, zorder=5,
+            label="period's share of the decision margin (mean, line = range)")
+    ax.scatter([], [], s=14, color="white", edgecolor=INK, lw=0.6, label="one dot = one training run")
     ax.set_xticks(range(len(names)), [CLASS_FULL[c] for c in names])
     ax.set_ylim(0, 1.05)
     ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
     ax.set_ylabel("share of correctly classified test stars")
-    ax.legend(frameon=False, fontsize=7.5, loc="upper center", ncol=3, bbox_to_anchor=(0.5, -0.08))
+    ax.legend(frameon=False, fontsize=7.5, loc="upper center", ncol=2, bbox_to_anchor=(0.5, -0.08))
     ax.set_title("(b) Would each half have got the star right on its own?", loc="left", fontsize=10)
     if conflict:
         ax = axes[2]
@@ -681,11 +704,16 @@ def fix_period(path, S, grid, ranges, variant="B_period", conflict=None):
         ax.set_xlabel("period taken from a star of this class")
         ax.set_ylabel("light-curve shape of this class")
         fig.colorbar(im, ax=ax, fraction=0.046, format=matplotlib.ticker.PercentFormatter(1.0))
-        ax.set_title("(c) Conflict test: share that keeps its own class", loc="left", fontsize=10)
+        ax.set_title("(c) Conflict test: share that keeps its own class\n     (mean over runs)", loc="left", fontsize=10)
+    n_runs = len(B[names[0]]["shape_alone_correct"]["per_seed"])
     fig.suptitle("Period input: logit = shape term + period term, so every decision splits exactly in two "
-                 "(mean ± std over seeds)", fontsize=10, x=0.01, ha="left")
+                 f"({n_runs} training runs)", fontsize=10, x=0.01, ha="left")
     fig.savefig(path, dpi=160)
     plt.close(fig)
+
+
+BENCH_COL = {"cnn_shape": C_RND, "cnn_period": C1, "rf_shape": "#c9c7c0", "rf_shape_period": C2,
+             "gb_shape_period": "#f4a582", "rf_period_only": INK2}
 
 
 def benchmark(path, S, labels):
